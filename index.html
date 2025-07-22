@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Multi-Server Monitor Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #f3f6fa;
+      margin: 0;
+      padding: 1rem;
+    }
+
+    h1 {
+      text-align: center;
+      color: #222;
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+    }
+
+    #last-updated, #manual-refresh {
+      text-align: center;
+      font-size: 0.9rem;
+      color: #555;
+      margin-bottom: 1rem;
+    }
+
+    #manual-refresh button {
+      padding: 0.4rem 0.8rem;
+      background-color: #3498db;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .server-row {
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 1rem;
+      box-shadow: 0 6px 12px rgba(0,0,0,0.05);
+      width: 280px;
+    }
+
+    .card-header {
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #2c3e50;
+      margin-bottom: 0.6rem;
+    }
+
+    .metric {
+      font-size: 0.9rem;
+      margin-bottom: 0.4rem;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .metric-value {
+      font-weight: bold;
+    }
+
+    canvas {
+      max-width: 100%;
+      height: 180px !important;
+      margin-top: 1rem;
+    }
+
+    .drive-space {
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    .drive-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.2rem;
+    }
+
+    .warning {
+      color: red;
+      font-weight: bold;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Multi-Server Monitor Dashboard</h1>
+  <div id="last-updated">Last updated: ...</div>
+  <div id="manual-refresh"><button onclick="loadServers()">🔄 Refresh</button></div>
+  <div id="server-container"></div>
+
+  <script>
+    function formatUtilization(value, type) {
+      const warning =
+        (type === 'cpu' && value > 80) ||
+        (type === 'ram' && value > 90);
+      const color = warning ? 'red' : value > 60 ? '#f39c12' : '#2ecc71';
+      return `<span class="metric-value" style="color: ${color}">${value}%</span>` +
+        (warning ? `<div class="warning">${type.toUpperCase()} HIGH</div>` : '');
+    }
+
+    function formatDrives(drives) {
+      return drives.map(d => {
+        const warning = parseInt(d.freespace) < 20;
+        return `
+          <div class="drive-item">
+            <span>${d.drive}</span>
+            <span style="color: ${warning ? 'red' : 'inherit'}">${d.freespace}% free ${warning ? '<span class="warning">LOW SPACE</span>' : ''}</span>
+          </div>`;
+      }).join('');
+    }
+
+    async function loadServers() {
+      const container = document.getElementById('server-container');
+      container.innerHTML = '';
+      const res = await fetch('http://localhost:5208/api/ServerInfo');
+      const data = await res.json();
+
+      data.forEach((server, index) => {
+        const row = document.createElement('div');
+        row.className = 'server-row';
+
+        const infoCard = document.createElement('div');
+        infoCard.className = 'card';
+        infoCard.innerHTML = `
+          <div class="card-header">${server.serverIPAddress}</div>
+          <div class="metric"><span>CPU Utilization:</span>${formatUtilization(server.cpuUtilization, 'cpu')}</div>
+          <div class="metric"><span>RAM Utilization:</span>${formatUtilization(server.ramUtilization, 'ram')}</div>
+          <div class="metric"><span>Last Updated:</span><span class="metric-value">${server.pulledTime}</span></div>
+          <div class="drive-space">${formatDrives(server.driveSpace)}</div>
+        `;
+
+        const cpuCard = document.createElement('div');
+        cpuCard.className = 'card';
+        cpuCard.innerHTML = `<h4>CPU Usage</h4><canvas id="cpu-${index}"></canvas>`;
+
+        const ramCard = document.createElement('div');
+        ramCard.className = 'card';
+        ramCard.innerHTML = `<h4>RAM Usage</h4><canvas id="ram-${index}"></canvas>`;
+
+        const diskCard = document.createElement('div');
+        diskCard.className = 'card';
+        diskCard.innerHTML = `<h4>Disk Usage</h4><canvas id="disk-${index}"></canvas>`;
+
+        row.appendChild(infoCard);
+        row.appendChild(cpuCard);
+        row.appendChild(ramCard);
+        row.appendChild(diskCard);
+        container.appendChild(row);
+
+        // CPU Pie
+        new Chart(document.getElementById(`cpu-${index}`), {
+          type: 'pie',
+          data: {
+            labels: ['Used CPU %', 'Free CPU %'],
+            datasets: [{
+              data: [server.cpuUtilization, 100 - server.cpuUtilization],
+              backgroundColor: ['#e67e22', '#2ecc71']
+            }]
+          }
+        });
+
+        // RAM Pie
+        new Chart(document.getElementById(`ram-${index}`), {
+          type: 'pie',
+          data: {
+            labels: ['Used RAM %', 'Free RAM %'],
+            datasets: [{
+              data: [server.ramUtilization, 100 - server.ramUtilization],
+              backgroundColor: ['#9b59b6', '#2ecc71']
+            }]
+          }
+        });
+
+        // Disk Bar Chart (Used + Free)
+        new Chart(document.getElementById(`disk-${index}`), {
+          type: 'bar',
+          data: {
+            labels: server.driveSpace.map(d => d.drive),
+            datasets: [
+              {
+                label: 'Used Space %',
+                data: server.driveSpace.map(d => 100 - parseInt(d.freespace)),
+                backgroundColor: '#e74c3c'
+              },
+              {
+                label: 'Free Space %',
+                data: server.driveSpace.map(d => parseInt(d.freespace)),
+                backgroundColor: '#2ecc71'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: {
+                beginAtZero: true,
+                max: 100
+              }
+            }
+          }
+        });
+      });
+
+      document.getElementById('last-updated').innerText = `Last updated: ${new Date().toLocaleString()}`;
+    }
+
+    loadServers();
+    setInterval(loadServers, 60000);
+  </script>
+</body>
+</html>
